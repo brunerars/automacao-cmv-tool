@@ -207,7 +207,8 @@ def formatar_moeda_compacto(valor):
     if pd.isna(valor) or valor == 0:
         return "R$ 0"
     if abs(valor) >= 1_000_000:
-        return f"R$ {valor/1_000_000:.1f}M"
+        milhoes = f"{valor/1_000_000:.1f}".replace(".", ",")
+        return f"R$ {milhoes}M"
     if abs(valor) >= 1_000:
         return f"R$ {valor/1_000:.0f}K"
     return f"R$ {valor:.0f}"
@@ -239,8 +240,15 @@ def render_os_card(os_num, df_os_row, df_familias):
     # Emoji indicador
     emoji_risco = {'ESTOURADO': '🔴', 'CRÍTICO': '🟠', 'ATENÇÃO': '🟡', 'OK': '🟢'}.get(risco, '⚪')
 
-    # Título do expander com informações resumidas
-    titulo = f"{emoji_risco} **OS {os_num}** | {risco} | Exec: {exec_pct:.0f}% | Saldo: {formatar_moeda_compacto(saldo)}"
+    # Título do expander com informações resumidas (curto e sem markdown)
+    # Mantém o "Previsto → Realizado" no header sem poluir a UI.
+    previsto_label = formatar_moeda_compacto(previsto).replace("R$", r"R\$")
+    realizado_label = formatar_moeda_compacto(realizado).replace("R$", r"R\$")
+    saldo_label = formatar_moeda_compacto(saldo).replace("R$", r"R\$")
+    titulo = (
+        f"{emoji_risco} OS {os_num} • {risco} • "
+        f"{previsto_label} → {realizado_label} • Saldo: {saldo_label} • {exec_pct:.0f}%"
+    )
 
     with st.expander(titulo, expanded=False):
         # Header com métricas principais
@@ -310,9 +318,9 @@ def render_os_card(os_num, df_os_row, df_familias):
             <div class="familia-row familia-{fam_classe}">
                 <div class="familia-name">{fam_nome}</div>
                 <div class="familia-values">
-                    <span>Prev: {formatar_moeda_compacto(fam_prev)}</span>
-                    <span>Real: {formatar_moeda_compacto(fam_real)}</span>
-                    <span class="{saldo_class}">Saldo: {formatar_moeda_compacto(fam_saldo)}</span>
+                    <span>Prev: {formatar_moeda(fam_prev)}</span>
+                    <span>Real: {formatar_moeda(fam_real)}</span>
+                    <span class="{saldo_class}">Saldo: {formatar_moeda(fam_saldo)}</span>
                 </div>
                 <div class="familia-exec" style="color: {fam_cor}">{fam_exec:.0f}%</div>
             </div>
@@ -343,18 +351,38 @@ if uploaded_file is not None:
         with st.sidebar:
             st.header("🔍 Filtros")
 
+            def limpar_filtros():
+                st.session_state["filtro_status"] = []
+                st.session_state["os_selecionadas"] = []
+                st.session_state["familias_selecionadas"] = []
+                st.session_state["busca_os"] = ""
+
+            st.button("Limpar filtros", on_click=limpar_filtros, use_container_width=True)
+
             filtro_status = st.multiselect(
                 "Status",
-                options=['ESTOURADO', 'CRÍTICO', 'ATENÇÃO', 'OK'],
-                default=None,
+                options=['ESTOURADO', 'CRÍTICO', 'ATENÇÃO', 'OK', 'SEM ORÇAMENTO'],
+                key="filtro_status",
                 help="Filtrar por classificação de risco"
             )
 
             os_list = sorted(df['OS'].unique().tolist())
-            os_selecionadas = st.multiselect("Ordem de Serviço", options=os_list)
+            busca_os = st.text_input(
+                "Buscar OS",
+                key="busca_os",
+                placeholder="Ex: 3185",
+                help="Filtra as opções de OS pelo texto digitado"
+            )
+            if busca_os:
+                busca = busca_os.strip().lower()
+                os_list_filtrada = [os for os in os_list if busca in str(os).lower()]
+            else:
+                os_list_filtrada = os_list
+            os_list_filtrada = sorted(set(os_list_filtrada + st.session_state.get("os_selecionadas", [])))
+            os_selecionadas = st.multiselect("Ordem de Serviço", options=os_list_filtrada, key="os_selecionadas")
 
             familias_list = sorted(df['FAMILIA'].unique().tolist())
-            familias_selecionadas = st.multiselect("Família", options=familias_list)
+            familias_selecionadas = st.multiselect("Família", options=familias_list, key="familias_selecionadas")
 
         # Aplicar filtros
         df_filtrado = df.copy()
@@ -362,6 +390,13 @@ if uploaded_file is not None:
             df_filtrado = df_filtrado[df_filtrado['OS'].isin(os_selecionadas)]
         if familias_selecionadas:
             df_filtrado = df_filtrado[df_filtrado['FAMILIA'].isin(familias_selecionadas)]
+
+        if len(df_filtrado) == 0:
+            st.warning(
+                "Nenhum dado encontrado com os filtros atuais. "
+                "Dica: limpe os filtros ou remova algum critério para voltar a ver resultados."
+            )
+            st.stop()
 
         # Agregar por OS
         df_os = agregar_por_os(df_filtrado)
@@ -383,6 +418,7 @@ if uploaded_file is not None:
         n_critico = len(df_os_total[df_os_total['RISCO'] == 'CRÍTICO'])
         n_atencao = len(df_os_total[df_os_total['RISCO'] == 'ATENÇÃO'])
         n_ok = len(df_os_total[df_os_total['RISCO'] == 'OK'])
+        n_sem_orcamento = len(df_os_total[df_os_total['RISCO'] == 'SEM ORÇAMENTO'])
 
         # ===== RESUMO =====
         st.markdown("---")
@@ -437,6 +473,9 @@ if uploaded_file is not None:
             </div>
             """, unsafe_allow_html=True)
 
+        if n_sem_orcamento > 0:
+            st.caption(f"⚪ Sem orçamento: {n_sem_orcamento}")
+
         st.markdown("---")
 
         # ===== ABAS =====
@@ -448,7 +487,19 @@ if uploaded_file is not None:
             st.caption("Clique em uma OS para ver o breakdown por família. Ordenado por % de execução.")
 
             if len(df_os) == 0:
-                st.warning("Nenhuma OS encontrada com os filtros selecionados.")
+                detalhes = []
+                if filtro_status:
+                    detalhes.append(f"Status: {', '.join(filtro_status)}")
+                if os_selecionadas:
+                    detalhes.append(f"OS: {', '.join(map(str, os_selecionadas[:10]))}{'…' if len(os_selecionadas) > 10 else ''}")
+                if familias_selecionadas:
+                    detalhes.append(f"Família: {', '.join(map(str, familias_selecionadas[:5]))}{'…' if len(familias_selecionadas) > 5 else ''}")
+
+                msg = "Nenhuma OS encontrada com os filtros selecionados."
+                if detalhes:
+                    msg += " (" + " | ".join(detalhes) + ")"
+                msg += " Dica: tente limpar filtros ou remover algum critério."
+                st.warning(msg)
             else:
                 # Renderizar cards expansíveis
                 for _, os_row in df_os.iterrows():
@@ -519,9 +570,9 @@ if uploaded_file is not None:
                         <div class="familia-row familia-{os_classe}">
                             <div class="familia-name">OS {row['OS']}</div>
                             <div class="familia-values">
-                                <span>Prev: {formatar_moeda_compacto(row['PREVISTO'])}</span>
-                                <span>Real: {formatar_moeda_compacto(row['REALIZADO'])}</span>
-                                <span class="{saldo_class}">Saldo: {formatar_moeda_compacto(row['SALDO'])}</span>
+                                <span>Prev: {formatar_moeda(row['PREVISTO'])}</span>
+                                <span>Real: {formatar_moeda(row['REALIZADO'])}</span>
+                                <span class="{saldo_class}">Saldo: {formatar_moeda(row['SALDO'])}</span>
                             </div>
                             <div class="familia-exec" style="color: {os_cor}">{os_exec:.0f}%</div>
                         </div>
