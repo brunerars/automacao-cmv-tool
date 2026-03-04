@@ -118,9 +118,49 @@ st.markdown("""
 # FUNÇÕES DE PROCESSAMENTO
 # =====================================================
 
+def detectar_formato(df_raw):
+    """Detecta o formato da planilha: 'raw_erp' ou 'comprador'"""
+    first_row = [str(c).strip().upper() for c in df_raw.iloc[0].tolist()]
+    if 'EMPRESA' in first_row or 'NUMERO_SERVICO' in first_row:
+        return 'raw_erp'
+    return 'comprador'
+
+
+def processar_raw_erp(df_raw):
+    """Parser para o formato RAW-ERP (6 colunas com EMPRESA e NUMERO_SERVICO)"""
+    df = df_raw.copy()
+    df.columns = [str(c).strip().upper() for c in df.iloc[0]]
+    df = df.iloc[1:].reset_index(drop=True)
+
+    df = df.rename(columns={
+        'NUMERO_SERVICO': 'OS',
+        'VALORTOTALCOMPRADO': 'REALIZADO'
+    })
+
+    df = df[['OS', 'FAMILIA', 'PREVISTO', 'REALIZADO', 'SALDO']].copy()
+
+    df = df[df['OS'].notna()].copy()
+
+    for col in ['PREVISTO', 'REALIZADO', 'SALDO']:
+        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+
+    df['OS'] = df['OS'].astype(str).str.strip()
+    df['FAMILIA'] = df['FAMILIA'].astype(str).str.strip()
+
+    return df
+
+
 def processar_planilha(uploaded_file):
     """Pipeline de processamento da planilha"""
     df_raw = pd.read_excel(uploaded_file, header=None)
+
+    formato = detectar_formato(df_raw)
+
+    if formato == 'raw_erp':
+        st.info("ℹ️ Formato detectado: **RAW-ERP** (exportação direta do sistema)")
+        return processar_raw_erp(df_raw)
+
+    st.info("ℹ️ Formato detectado: **Planilha Formatada** (layout padrão comprador)")
 
     header_row = None
     for idx in range(min(10, len(df_raw))):
@@ -338,7 +378,7 @@ with st.sidebar:
     uploaded_file = st.file_uploader(
         "Carregar Planilha CMV",
         type=["xlsx", "xls"],
-        help="Estrutura: O_S | FAMILIA | PREVISTO | REALIZADO | SALDO"
+        help="Aceita dois formatos: Planilha Formatada (O_S | FAMILIA | PREVISTO | REALIZADO | SALDO) ou RAW-ERP (EMPRESA | NUMERO_SERVICO | FAMILIA | PREVISTO | VALORTOTALCOMPRADO | SALDO)"
     )
     st.markdown("---")
 
